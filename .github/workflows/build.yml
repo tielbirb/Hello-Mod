@@ -1,4 +1,4 @@
-gradlelew: Build mod
+gradle: Build mod
 on: [push, workflow_dispatch]
 jobs:
   build:
@@ -9,7 +9,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 8
-      - run: chmod +x gradlew
+      - run: chmod +x gradle
       - run: ./gradlew setupCiWorkspace build --no-daemon
       - uses: actions/upload-artifact@v4
         with:
