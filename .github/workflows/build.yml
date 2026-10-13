@@ -9,19 +9,213 @@ jobs:
         with:
           distribution: temurin
           java-version: 8
-      - name: Show files
-        run: find . -maxdepth 3 -not -path './.git/*' | head -60
       - name: Get Gradle 2.14.1
         run: |
           wget -q https://services.gradle.org/distributions/gradle-2.14.1-bin.zip
           unzip -q gradle-2.14.1-bin.zip
-      - name: Build
+          sudo apt-get install -y ffmpeg
+      - name: Generate mod project
         run: |
-          DIR=$(dirname "$(find . -name build.gradle -not -path './gradle-2.14.1/*' | head -1)")
-          echo "Building in $DIR"
-          cd "$DIR"
+          W=work
+          P=$W/src/main/java/com/tielcraft/dumbhello
+          A=$W/src/main/resources/assets/tielcraft_dumb_hello
+          mkdir -p $P $A/sounds
+          MP3=$(find . -maxdepth 1 -iname '*.mp3' | head -1)
+          JPG=$(find . -maxdepth 1 -iname '*.jpg' | head -1)
+          echo "mp3=$MP3 jpg=$JPG"
+          ffmpeg -y -loglevel error -i "$MP3" -ac 1 -c:a libvorbis -q:a 5 $A/sounds/hello.ogg
+          if [ -n "$JPG" ]; then ffmpeg -y -loglevel error -i "$JPG" -vf "crop='min(iw,ih)':'min(iw,ih)',scale=256:256" $W/src/main/resources/logo.png; fi
+
+          cat > $W/build.gradle <<'EOF'
+          buildscript {
+              repositories {
+                  jcenter()
+                  maven { url = "https://files.minecraftforge.net/maven" }
+              }
+              dependencies {
+                  classpath 'net.minecraftforge.gradle:ForgeGradle:2.3-SNAPSHOT'
+              }
+          }
+          apply plugin: 'net.minecraftforge.gradle.forge'
+          version = "1.0.0"
+          group = "com.tielcraft.dumbhello"
+          archivesBaseName = "TielCraftsDumbHello-1.12.2"
+          sourceCompatibility = targetCompatibility = '1.8'
+          compileJava {
+              sourceCompatibility = targetCompatibility = '1.8'
+          }
+          minecraft {
+              version = "1.12.2-14.23.5.2838"
+              runDir = "run"
+              mappings = "snapshot_20171003"
+          }
+          processResources {
+              inputs.property "version", project.version
+              inputs.property "mcversion", project.minecraft.version
+              from(sourceSets.main.resources.srcDirs) {
+                  include 'mcmod.info'
+                  expand 'version':project.version, 'mcversion':project.minecraft.version
+              }
+              from(sourceSets.main.resources.srcDirs) {
+                  exclude 'mcmod.info'
+              }
+          }
+          EOF
+
+          cat > $W/src/main/resources/mcmod.info <<'EOF'
+          [{
+            "modid": "tielcraft_dumb_hello",
+            "name": "TielCraft's Dumb Hello mod",
+            "description": "Adds the Hello sound effect from Raldi's Crackhouse to Minecraft 1.12.2. YOU NEED GECKOLIB FOR THE ZOOM THINGY.",
+            "version": "${version}",
+            "mcversion": "${mcversion}",
+            "authorList": ["TielCraft"],
+            "logoFile": "logo.png"
+          }]
+          EOF
+
+          echo '{"pack":{"pack_format":3,"description":"TielCraft Dumb Hello"}}' > $W/src/main/resources/pack.mcmeta
+
+          cat > $A/sounds.json <<'EOF'
+          {"hello":{"category":"hostile","subtitle":"Hello","sounds":[{"name":"tielcraft_dumb_hello:hello","stream":false}]}}
+          EOF
+
+          cat > $P/DumbHelloMod.java <<'EOF'
+          package com.tielcraft.dumbhello;
+
+          import net.minecraft.util.ResourceLocation;
+          import net.minecraft.util.SoundEvent;
+          import net.minecraftforge.common.MinecraftForge;
+          import net.minecraftforge.event.RegistryEvent;
+          import net.minecraftforge.fml.common.Mod;
+          import net.minecraftforge.fml.common.event.FMLInitializationEvent;
+          import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+
+          @Mod(modid = DumbHelloMod.MODID,
+               name = DumbHelloMod.NAME,
+               version = "1.0.0",
+               acceptedMinecraftVersions = "[1.12.2]",
+               dependencies = "required-after:geckolib3",
+               clientSideOnly = true)
+          @Mod.EventBusSubscriber
+          public class DumbHelloMod {
+              public static final String MODID = "tielcraft_dumb_hello";
+              public static final String NAME = "TielCraft's Dumb Hello mod";
+              public static SoundEvent HELLO;
+
+              @SubscribeEvent
+              public static void registerSounds(RegistryEvent.Register<SoundEvent> event) {
+                  ResourceLocation id = new ResourceLocation(MODID, "hello");
+                  HELLO = new SoundEvent(id).setRegistryName(id);
+                  event.getRegistry().register(HELLO);
+              }
+
+              @Mod.EventHandler
+              public void init(FMLInitializationEvent e) {
+                  MinecraftForge.EVENT_BUS.register(new HelloHandler());
+              }
+          }
+          EOF
+
+          cat > $P/HelloHandler.java <<'EOF'
+          package com.tielcraft.dumbhello;
+
+          import net.minecraft.client.Minecraft;
+          import net.minecraft.client.audio.PositionedSoundRecord;
+          import net.minecraft.entity.Entity;
+          import net.minecraft.entity.monster.IMob;
+          import net.minecraft.entity.player.EntityPlayer;
+          import net.minecraftforge.client.event.FOVUpdateEvent;
+          import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+          import net.minecraftforge.fml.common.gameevent.TickEvent;
+
+          import java.util.ArrayList;
+          import java.util.List;
+
+          public class HelloHandler {
+              private static final double VERY_CLOSE = 6.0;
+              private static final double NEAR = 18.0;
+              private static final float ZOOM_MAX = 0.18f;
+              private static final float ZOOM_ONCE = 0.65f;
+              private static final float ZOOM_NONE = 1.0f;
+              private static final int SPAM_DELAY_TICKS = 6;
+
+              private float currentZoom = 1.0f;
+              private float targetZoom = 1.0f;
+              private boolean playedForThisApproach = false;
+              private int spamCooldown = 0;
+
+              @SubscribeEvent
+              public void onClientTick(TickEvent.ClientTickEvent event) {
+                  if (event.phase != TickEvent.Phase.END) return;
+                  Minecraft mc = Minecraft.getMinecraft();
+                  EntityPlayer player = mc.player;
+                  if (mc.world == null || player == null || mc.isGamePaused()) {
+                      targetZoom = ZOOM_NONE;
+                      currentZoom = ZOOM_NONE;
+                      playedForThisApproach = false;
+                      return;
+                  }
+                  double nearest = nearestHostileDistance(mc, player);
+                  if (nearest <= VERY_CLOSE) {
+                      targetZoom = ZOOM_MAX;
+                      playedForThisApproach = true;
+                      if (spamCooldown-- <= 0) {
+                          playHello(mc);
+                          spamCooldown = SPAM_DELAY_TICKS;
+                      }
+                  } else if (nearest <= NEAR) {
+                      if (!playedForThisApproach) {
+                          playedForThisApproach = true;
+                          playHello(mc);
+                          targetZoom = ZOOM_ONCE;
+                      } else if (targetZoom < ZOOM_ONCE) {
+                          targetZoom = ZOOM_ONCE;
+                      }
+                      spamCooldown = 0;
+                  } else {
+                      targetZoom = ZOOM_NONE;
+                      playedForThisApproach = false;
+                      spamCooldown = 0;
+                  }
+                  float speed = targetZoom < currentZoom ? 0.35f : 0.12f;
+                  currentZoom += (targetZoom - currentZoom) * speed;
+                  if (Math.abs(currentZoom - targetZoom) < 0.002f) currentZoom = targetZoom;
+              }
+
+              @SubscribeEvent
+              public void onFov(FOVUpdateEvent event) {
+                  if (currentZoom != ZOOM_NONE) {
+                      event.setNewfov(event.getNewfov() * currentZoom);
+                  }
+              }
+
+              private double nearestHostileDistance(Minecraft mc, EntityPlayer player) {
+                  double best = Double.MAX_VALUE;
+                  List<Entity> entities = new ArrayList<>(mc.world.loadedEntityList);
+                  for (Entity e : entities) {
+                      if (e == player || e.isDead || !(e instanceof IMob)) continue;
+                      double d = e.getDistance(player);
+                      if (d < best) best = d;
+                  }
+                  return best;
+              }
+
+              private void playHello(Minecraft mc) {
+                  if (DumbHelloMod.HELLO == null) return;
+                  mc.getSoundHandler().playSound(PositionedSoundRecord.getMasterRecord(DumbHelloMod.HELLO, 1.0F));
+              }
+          }
+          EOF
+          find $W -type f
+      - name: Build
+        working-directory: work
+        run: |
           "$GITHUB_WORKSPACE/gradle-2.14.1/bin/gradle" setupCiWorkspace build --no-daemon
+          ls -la build/libs
       - uses: actions/upload-artifact@v4
         with:
           name: TielCraftsDumbHello-jar
-          path: '**/build/libs/*.jar'
+          path: |
+            work/build/libs/*.jar
+            !work/build/libs/*-sources.jar
