@@ -20,9 +20,10 @@ jobs:
           P=$W/src/main/java/com/tielcraft/dumbhello
           A=$W/src/main/resources/assets/tielcraft_dumb_hello
           mkdir -p $P $A/sounds
-          MP3=$(find . -maxdepth 1 -iname '*.mp3' | head -1)
-          JPG=$(find . -maxdepth 1 -iname '*.jpg' | head -1)
+          MP3=$(find "$GITHUB_WORKSPACE" -iname '*.mp3' -not -path '*/work/*' | head -1)
+          JPG=$(find "$GITHUB_WORKSPACE" -iname '*.jpg' -not -path '*/work/*' | head -1)
           echo "mp3=$MP3 jpg=$JPG"
+          if [ -z "$MP3" ]; then echo "NO MP3 FOUND IN REPO - upload the mp3"; exit 1; fi
           ffmpeg -y -loglevel error -i "$MP3" -ac 1 -c:a libvorbis -q:a 5 $A/sounds/hello.ogg
           if [ -n "$JPG" ]; then ffmpeg -y -loglevel error -i "$JPG" -vf "crop='min(iw,ih)':'min(iw,ih)',scale=256:256" $W/src/main/resources/logo.png; fi
 
