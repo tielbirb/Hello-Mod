@@ -1,4 +1,4 @@
-gradle: Build mod
+Name: Build mod
 on: [push, workflow_dispatch]
 jobs:
   build:
